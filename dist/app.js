@@ -19,8 +19,17 @@ const selectionRoutes_1 = require("./routes/selectionRoutes");
 const splashAdminRoutes_1 = require("./routes/splashAdminRoutes");
 const error_1 = require("./middleware/error");
 exports.app = (0, express_1.default)();
+const usesHttps = env_1.env.BASE_URL.startsWith('https://');
 exports.app.disable('x-powered-by');
-exports.app.use((0, helmet_1.default)({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+exports.app.use((0, helmet_1.default)({
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+    strictTransportSecurity: usesHttps ? {} : false,
+    contentSecurityPolicy: {
+        directives: {
+            upgradeInsecureRequests: usesHttps ? [] : null,
+        },
+    },
+}));
 exports.app.use((0, cors_1.default)({ origin: env_1.env.NODE_ENV === 'development' ? true : env_1.env.ADMIN_ORIGIN.split(','), credentials: true }));
 exports.app.use((0, express_rate_limit_1.default)({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
 exports.app.use(express_1.default.json({ limit: '1mb' }));

@@ -14,8 +14,18 @@ import { splashAdminRoutes } from './routes/splashAdminRoutes';
 import { errorHandler, notFound } from './middleware/error';
 
 export const app = express();
+const usesHttps = env.BASE_URL.startsWith('https://');
+
 app.disable('x-powered-by');
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.use(helmet({
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+  strictTransportSecurity: usesHttps ? {} : false,
+  contentSecurityPolicy: {
+    directives: {
+      upgradeInsecureRequests: usesHttps ? [] : null,
+    },
+  },
+}));
 app.use(cors({ origin: env.NODE_ENV === 'development' ? true : env.ADMIN_ORIGIN.split(','), credentials: true }));
 app.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false }));
 app.use(express.json({ limit: '1mb' }));
