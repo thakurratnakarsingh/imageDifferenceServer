@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="800" viewBox="0 0 1200 800">
+  <defs><linearGradient id="sky" x2="0" y2="1"><stop stop-color="#b8e8f5"/><stop offset="1" stop-color="#eef8e4"/></linearGradient></defs>
+  <rect width="1200" height="800" fill="url(#sky)"/><rect x="565" y="110" width="70" height="70" rx="10" fill="#ff9d55"/>
+  <g fill="#9d7de0" opacity=".95"><ellipse cx="840" cy="120" rx="80" ry="35"/><ellipse cx="900" cy="112" rx="60" ry="28"/></g>
+  <path d="M0 500 Q220 400 430 505 T820 490 T1200 500 V800 H0Z" fill="#5fa85c"/>
+  <rect x="790" y="290" width="330" height="260" rx="8" fill="#f5dfbc"/><path d="M750 315 L955 180 1160 315Z" fill="#b95f51"/>
+  <circle cx="992" cy="437" r="55" fill="#75a9b9"/><path d="M992 385V490M940 437H1045" stroke="#eaf7fa" stroke-width="9"/>
+  <g transform="rotate(12 590 470)"><rect x="500" y="420" width="180" height="100" rx="10" fill="#855a3b"/><text x="590" y="482" text-anchor="middle" fill="#fff7d6" font-family="sans-serif" font-size="28">GARDEN</text></g>
+  <g><rect x="75" y="490" width="95" height="120" rx="12" fill="#405fc4"/><path d="M80 510h85l-10 90H90Z" fill="#718ae0"/></g>
+  <g fill="#745edb"><circle cx="150" cy="140" r="22"/><circle cx="125" cy="170" r="22"/><circle cx="160" cy="185" r="22"/><circle cx="183" cy="155" r="22"/><circle cx="153" cy="160" r="18" fill="#ffd75c"/></g>
+  <g transform="translate(360 125)"><polygon points="0,-32 9,-10 34,-10 14,5 22,30 0,15 -22,30 -14,5 -34,-10 -9,-10" fill="#ffce48" stroke="#fff" stroke-width="5"/></g>
+  <g fill="#3d813f"><circle cx="845" cy="535" r="65"/><circle cx="900" cy="530" r="70"/><circle cx="870" cy="485" r="55"/></g>
+  <g stroke="#f4d84a" stroke-width="9"><path d="M820 490l65 85M855 475l70 80M810 530l55 65"/></g>
+  <g transform="translate(370 505)"><ellipse rx="20" ry="12" fill="#ff7aa8"/><ellipse cx="-17" cy="-12" rx="16" ry="11" fill="#754cd2"/><ellipse cx="17" cy="-12" rx="16" ry="11" fill="#754cd2"/></g>
+</svg>
