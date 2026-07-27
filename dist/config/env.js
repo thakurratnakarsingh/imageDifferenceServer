@@ -6,7 +6,7 @@ const zod_1 = require("zod");
 const schema = zod_1.z.object({
     NODE_ENV: zod_1.z.enum(['development', 'test', 'production']).default('development'),
     PORT: zod_1.z.coerce.number().default(5000),
-    DB_HOST: zod_1.z.string().default('localhost'),
+    DB_HOST: zod_1.z.string().default('127.0.0.1'),
     DB_PORT: zod_1.z.coerce.number().default(3306),
     DB_NAME: zod_1.z.string().default('find_differences_game'),
     DB_USER: zod_1.z.string().default('gameuser'),
