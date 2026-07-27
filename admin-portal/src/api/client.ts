@@ -1,5 +1,5 @@
 import axios from 'axios';
-export const api = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000/api/v1' });
+export const api = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL || 'http://13.60.169.242:5000/api/v1' });
 api.interceptors.request.use(config => {
   const token = localStorage.getItem('admin_token');
   if (token) config.headers.Authorization = `Bearer ${token}`;

@@ -30,5 +30,10 @@ app.use('/api/v1/player-selections', selectionRoutes);
 app.use('/api/v1/admin/splash', splashAdminRoutes);
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/v1', publicRoutes);
+
+const adminDist = path.resolve(__dirname, '../admin-portal/dist');
+app.use('/admin', express.static(adminDist, { index: 'index.html', maxAge: env.NODE_ENV === 'production' ? '1h' : 0 }));
+app.get('/admin/{*path}', (_req, res) => res.sendFile(path.join(adminDist, 'index.html')));
+
 app.use(notFound);
 app.use(errorHandler);

@@ -34,5 +34,8 @@ exports.app.use('/api/v1/player-selections', selectionRoutes_1.selectionRoutes);
 exports.app.use('/api/v1/admin/splash', splashAdminRoutes_1.splashAdminRoutes);
 exports.app.use('/api/v1/admin', adminRoutes_1.adminRoutes);
 exports.app.use('/api/v1', publicRoutes_1.publicRoutes);
+const adminDist = path_1.default.resolve(__dirname, '../admin-portal/dist');
+exports.app.use('/admin', express_1.default.static(adminDist, { index: 'index.html', maxAge: env_1.env.NODE_ENV === 'production' ? '1h' : 0 }));
+exports.app.get('/admin/{*path}', (_req, res) => res.sendFile(path_1.default.join(adminDist, 'index.html')));
 exports.app.use(error_1.notFound);
 exports.app.use(error_1.errorHandler);
