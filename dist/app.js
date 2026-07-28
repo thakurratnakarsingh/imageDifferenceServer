@@ -21,6 +21,7 @@ const error_1 = require("./middleware/error");
 exports.app = (0, express_1.default)();
 const usesHttps = env_1.env.BASE_URL.startsWith('https://');
 exports.app.disable('x-powered-by');
+exports.app.set('trust proxy', 'loopback');
 exports.app.use((0, helmet_1.default)({
     crossOriginResourcePolicy: { policy: 'cross-origin' },
     strictTransportSecurity: usesHttps ? {} : false,

@@ -17,6 +17,7 @@ export const app = express();
 const usesHttps = env.BASE_URL.startsWith('https://');
 
 app.disable('x-powered-by');
+app.set('trust proxy', 'loopback');
 app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
   strictTransportSecurity: usesHttps ? {} : false,
