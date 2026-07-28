@@ -23,6 +23,7 @@ app.use(helmet({
   strictTransportSecurity: usesHttps ? {} : false,
   contentSecurityPolicy: {
     directives: {
+      imgSrc: ["'self'", 'data:', 'blob:'],
       upgradeInsecureRequests: usesHttps ? [] : null,
     },
   },

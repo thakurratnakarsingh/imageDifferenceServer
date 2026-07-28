@@ -27,6 +27,7 @@ exports.app.use((0, helmet_1.default)({
     strictTransportSecurity: usesHttps ? {} : false,
     contentSecurityPolicy: {
         directives: {
+            imgSrc: ["'self'", 'data:', 'blob:'],
             upgradeInsecureRequests: usesHttps ? [] : null,
         },
     },

@@ -19,7 +19,8 @@ interface ImageInfo {
   issues: string[];
 }
 
-const supportedTypes = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const supportedTypes = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
+const supportedExtension = /\.(jpe?g|png|webp)$/i;
 const minimumDimension = 720;
 const maximumDimension = 4096;
 const maximumSizeMb = 15;
@@ -40,7 +41,7 @@ export default function CreateLevelPage() {
   },[job?.jobUuid,job?.status]);
   async function select(next?: File) {
     if (!next) return;
-    if (!supportedTypes.has(next.type)) {
+    if (!supportedTypes.has(next.type.toLowerCase()) && !supportedExtension.test(next.name)) {
       setError('Only JPG, PNG, or WebP images can be edited and uploaded.');
       return;
     }
@@ -112,7 +113,17 @@ export default function CreateLevelPage() {
   </div>;
 }
 
-function inspectImage(file: File) {
+async function inspectImage(file: File) {
+  if ('createImageBitmap' in window) {
+    try {
+      const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+      const dimensions = { width: bitmap.width, height: bitmap.height };
+      bitmap.close();
+      return dimensions;
+    } catch {
+      // Older browsers and a few JPEG encodings need the HTMLImageElement fallback.
+    }
+  }
   return new Promise<{ width: number; height: number }>((resolve, reject) => {
     const objectUrl = URL.createObjectURL(file);
     const image = new Image();
