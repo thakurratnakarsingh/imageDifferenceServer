@@ -72,11 +72,24 @@ exports.adminRoutes.patch('/actresses/:id/status', async (req, res) => {
     res.json({ success: true, data: await item.update({ isActive: Boolean(req.body.isActive) }) });
 });
 exports.adminRoutes.delete('/actresses/:id', async (req, res) => {
-    const levels = await models_1.Level.count({ where: { actressId: req.params.id } });
-    if (levels)
-        return res.status(409).json({ success: false, message: 'Deactivate categories that already have levels' });
-    await models_1.Actress.destroy({ where: { id: req.params.id } });
-    res.status(204).end();
+    const category = await models_1.Actress.findByPk(req.params.id);
+    if (!category)
+        return res.status(404).json({ success: false, message: 'Category not found' });
+    const levels = await models_1.Level.findAll({ where: { actressId: category.id } });
+    const filePaths = [
+        ...await collectLevelFilePaths(levels),
+        ...(category.profileImage ? [category.profileImage] : [])
+    ];
+    await database_1.sequelize.transaction(async (transaction) => {
+        await destroyLevelRecords(levels.map(level => level.id), transaction);
+        await category.destroy({ transaction });
+    });
+    const cleanupWarnings = await removeLevelFiles(filePaths);
+    res.json({
+        success: true,
+        message: `Category and ${levels.length} related level${levels.length === 1 ? '' : 's'} deleted`,
+        data: { deletedCategoryId: category.id, deletedLevels: levels.length, cleanupWarnings }
+    });
 });
 exports.adminRoutes.get('/levels', async (req, res) => {
     const page = Math.max(1, Number(req.query.page) || 1), limit = Math.min(100, Number(req.query.limit) || 20);
@@ -140,13 +153,14 @@ exports.adminRoutes.delete('/levels/:id', async (req, res) => {
     const level = await models_1.Level.findByPk(req.params.id);
     if (!level)
         return res.status(404).json({ success: false, message: 'Level not found' });
-    try {
-        await level.destroy();
-        res.status(204).end();
-    }
-    catch {
-        res.status(409).json({ success: false, message: 'This level has player history and cannot be deleted. Deactivate it instead.' });
-    }
+    const filePaths = await collectLevelFilePaths([level]);
+    await database_1.sequelize.transaction(transaction => destroyLevelRecords([level.id], transaction));
+    const cleanupWarnings = await removeLevelFiles(filePaths);
+    res.json({
+        success: true,
+        message: 'Level and related images deleted',
+        data: { deletedLevelId: level.id, cleanupWarnings }
+    });
 });
 exports.adminRoutes.post('/puzzle-generator/generate', upload.single('originalImage'), async (req, res) => {
     if (!req.file)
@@ -311,4 +325,87 @@ function categoryPayload(body) {
         profileImage: body.profileImage == null ? null : String(body.profileImage).trim() || null,
         isActive: body.isActive === undefined ? true : Boolean(body.isActive)
     };
+}
+async function destroyLevelRecords(levelIds, transaction) {
+    if (!levelIds.length)
+        return;
+    const replacements = { levelIds };
+    await database_1.sequelize.query(`DELETE FROM session_found_differences
+     WHERE session_id IN (SELECT id FROM game_sessions WHERE level_id IN (:levelIds))
+        OR difference_id IN (SELECT id FROM level_differences WHERE level_id IN (:levelIds))`, { replacements, transaction });
+    await database_1.sequelize.query('DELETE FROM game_attempts WHERE level_id IN (:levelIds)', { replacements, transaction });
+    await database_1.sequelize.query('DELETE FROM game_sessions WHERE level_id IN (:levelIds)', { replacements, transaction });
+    await models_1.Level.destroy({ where: { id: { [sequelize_1.Op.in]: levelIds } }, transaction });
+}
+async function collectLevelFilePaths(levels) {
+    if (!levels.length)
+        return [];
+    const levelIds = levels.map(level => level.id);
+    const analysisRows = await database_1.sequelize.query(`SELECT difference_mask_path AS differenceMaskPath
+     FROM image_analysis_results
+     WHERE level_id IN (:levelIds)`, { replacements: { levelIds }, type: sequelize_1.QueryTypes.SELECT });
+    return levels.flatMap(level => [
+        level.originalImagePath,
+        level.modifiedImagePath,
+        level.previewImagePath,
+        path_1.default.join(path_1.default.dirname(level.originalImagePath), 'metadata.json')
+    ]).concat(analysisRows.map(row => row.differenceMaskPath)).filter((filePath) => Boolean(filePath));
+}
+async function removeLevelFiles(storedPaths) {
+    const levelsRoot = path_1.default.join(uploadsRoot, 'levels');
+    const files = new Set();
+    const directories = new Set();
+    for (const storedPath of storedPaths) {
+        const filePath = safeUploadPath(storedPath);
+        if (!filePath)
+            continue;
+        files.add(filePath);
+        const directory = path_1.default.dirname(filePath);
+        const relativeDirectory = path_1.default.relative(levelsRoot, directory);
+        if (relativeDirectory && !relativeDirectory.startsWith('..') && !path_1.default.isAbsolute(relativeDirectory)) {
+            directories.add(directory);
+        }
+    }
+    const warnings = [];
+    for (const filePath of files) {
+        try {
+            await (0, promises_1.rm)(filePath, { force: true });
+        }
+        catch (error) {
+            warnings.push(`Could not remove ${path_1.default.relative(uploadsRoot, filePath)}: ${error instanceof Error ? error.message : 'unknown error'}`);
+        }
+    }
+    for (const directory of directories) {
+        try {
+            await (0, promises_1.rmdir)(directory);
+        }
+        catch (error) {
+            const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+            if (code !== 'ENOENT' && code !== 'ENOTEMPTY') {
+                warnings.push(`Could not remove ${path_1.default.relative(uploadsRoot, directory)}: ${error instanceof Error ? error.message : 'unknown error'}`);
+            }
+        }
+    }
+    return warnings;
+}
+function safeUploadPath(storedPath) {
+    const normalized = storedPath.replace(/\\/g, '/');
+    const uploadsMarker = normalized.lastIndexOf('/uploads/');
+    let candidate;
+    if (uploadsMarker >= 0) {
+        candidate = path_1.default.resolve(uploadsRoot, normalized.slice(uploadsMarker + '/uploads/'.length));
+    }
+    else if (normalized.startsWith('uploads/')) {
+        candidate = path_1.default.resolve(uploadsRoot, normalized.slice('uploads/'.length));
+    }
+    else if (path_1.default.isAbsolute(storedPath)) {
+        candidate = path_1.default.resolve(storedPath);
+    }
+    else {
+        return null;
+    }
+    const relative = path_1.default.relative(uploadsRoot, candidate);
+    if (!relative || relative.startsWith('..') || path_1.default.isAbsolute(relative))
+        return null;
+    return candidate;
 }

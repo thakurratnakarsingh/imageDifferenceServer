@@ -106,7 +106,10 @@ export default function CategoryManagementPage() {
 
   function deleteCategory(category: Category) {
     setError('');
-    if (window.confirm(`Delete “${category.name}”? Categories with levels cannot be deleted.`)) {
+    const levelSummary = category.levelCount
+      ? ` This will also permanently delete ${category.levelCount} related level${category.levelCount === 1 ? '' : 's'}, all puzzle images, differences, generation jobs, and play history.`
+      : '';
+    if (window.confirm(`Delete “${category.name}”?${levelSummary} This action cannot be undone.`)) {
       remove.mutate(category.id);
     }
   }
@@ -161,9 +164,9 @@ export default function CategoryManagementPage() {
                   <Tooltip title="Edit category">
                     <IconButton onClick={() => openEdit(category)}><EditRounded/></IconButton>
                   </Tooltip>
-                  <Tooltip title={category.levelCount ? 'Deactivate categories that have levels' : 'Delete category'}>
+                  <Tooltip title={category.levelCount ? `Delete category and ${category.levelCount} related levels` : 'Delete category'}>
                     <span>
-                      <IconButton disabled={Boolean(category.levelCount) || remove.isPending} onClick={() => deleteCategory(category)}>
+                      <IconButton disabled={remove.isPending} onClick={() => deleteCategory(category)}>
                         <DeleteOutlineRounded/>
                       </IconButton>
                     </span>

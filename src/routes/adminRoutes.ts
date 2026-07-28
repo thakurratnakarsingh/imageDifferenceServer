@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import multer from 'multer';
 import path from 'path';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, rm, rmdir, writeFile } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { env } from '../config/env';
 import { sequelize } from '../config/database';
@@ -12,7 +12,7 @@ import { enqueueGeneration } from '../jobs/generationQueue';
 import { ImageModificationService } from '../services/image-generation/ImageModificationService';
 import { DifferenceValidationService } from '../services/image-generation/DifferenceValidationService';
 import { DifferenceRegion, ModificationType } from '../services/image-generation/types';
-import { Op } from 'sequelize';
+import { Op, QueryTypes, Transaction } from 'sequelize';
 
 export const adminRoutes = Router();
 adminRoutes.use(requireAdmin);
@@ -64,9 +64,23 @@ adminRoutes.patch('/actresses/:id/status', async (req, res) => {
   res.json({ success: true, data: await item.update({ isActive: Boolean(req.body.isActive) }) });
 });
 adminRoutes.delete('/actresses/:id', async (req, res) => {
-  const levels = await Level.count({ where: { actressId: req.params.id } });
-  if (levels) return res.status(409).json({ success: false, message: 'Deactivate categories that already have levels' });
-  await Actress.destroy({ where: { id: req.params.id } }); res.status(204).end();
+  const category = await Actress.findByPk(req.params.id);
+  if (!category) return res.status(404).json({ success: false, message: 'Category not found' });
+  const levels = await Level.findAll({ where: { actressId: category.id } });
+  const filePaths = [
+    ...await collectLevelFilePaths(levels),
+    ...(category.profileImage ? [category.profileImage] : [])
+  ];
+  await sequelize.transaction(async transaction => {
+    await destroyLevelRecords(levels.map(level => level.id), transaction);
+    await category.destroy({ transaction });
+  });
+  const cleanupWarnings = await removeLevelFiles(filePaths);
+  res.json({
+    success: true,
+    message: `Category and ${levels.length} related level${levels.length === 1 ? '' : 's'} deleted`,
+    data: { deletedCategoryId: category.id, deletedLevels: levels.length, cleanupWarnings }
+  });
 });
 
 adminRoutes.get('/levels', async (req, res) => {
@@ -120,12 +134,14 @@ adminRoutes.patch('/levels/:id/status', async (req, res) => {
 adminRoutes.delete('/levels/:id', async (req, res) => {
   const level = await Level.findByPk(req.params.id);
   if (!level) return res.status(404).json({ success: false, message: 'Level not found' });
-  try {
-    await level.destroy();
-    res.status(204).end();
-  } catch {
-    res.status(409).json({ success: false, message: 'This level has player history and cannot be deleted. Deactivate it instead.' });
-  }
+  const filePaths = await collectLevelFilePaths([level]);
+  await sequelize.transaction(transaction => destroyLevelRecords([level.id], transaction));
+  const cleanupWarnings = await removeLevelFiles(filePaths);
+  res.json({
+    success: true,
+    message: 'Level and related images deleted',
+    data: { deletedLevelId: level.id, cleanupWarnings }
+  });
 });
 
 adminRoutes.post('/puzzle-generator/generate', upload.single('originalImage'), async (req, res) => {
@@ -268,4 +284,90 @@ function categoryPayload(body: Record<string, unknown>) {
     profileImage: body.profileImage == null ? null : String(body.profileImage).trim() || null,
     isActive: body.isActive === undefined ? true : Boolean(body.isActive)
   };
+}
+async function destroyLevelRecords(levelIds: number[], transaction: Transaction) {
+  if (!levelIds.length) return;
+  const replacements = { levelIds };
+  await sequelize.query(
+    `DELETE FROM session_found_differences
+     WHERE session_id IN (SELECT id FROM game_sessions WHERE level_id IN (:levelIds))
+        OR difference_id IN (SELECT id FROM level_differences WHERE level_id IN (:levelIds))`,
+    { replacements, transaction }
+  );
+  await sequelize.query(
+    'DELETE FROM game_attempts WHERE level_id IN (:levelIds)',
+    { replacements, transaction }
+  );
+  await sequelize.query(
+    'DELETE FROM game_sessions WHERE level_id IN (:levelIds)',
+    { replacements, transaction }
+  );
+  await Level.destroy({ where: { id: { [Op.in]: levelIds } }, transaction });
+}
+async function collectLevelFilePaths(levels: Level[]) {
+  if (!levels.length) return [];
+  const levelIds = levels.map(level => level.id);
+  const analysisRows = await sequelize.query<{ differenceMaskPath: string | null }>(
+    `SELECT difference_mask_path AS differenceMaskPath
+     FROM image_analysis_results
+     WHERE level_id IN (:levelIds)`,
+    { replacements: { levelIds }, type: QueryTypes.SELECT }
+  );
+  return levels.flatMap(level => [
+    level.originalImagePath,
+    level.modifiedImagePath,
+    level.previewImagePath,
+    path.join(path.dirname(level.originalImagePath), 'metadata.json')
+  ]).concat(analysisRows.map(row => row.differenceMaskPath)).filter((filePath): filePath is string => Boolean(filePath));
+}
+async function removeLevelFiles(storedPaths: string[]) {
+  const levelsRoot = path.join(uploadsRoot, 'levels');
+  const files = new Set<string>();
+  const directories = new Set<string>();
+  for (const storedPath of storedPaths) {
+    const filePath = safeUploadPath(storedPath);
+    if (!filePath) continue;
+    files.add(filePath);
+    const directory = path.dirname(filePath);
+    const relativeDirectory = path.relative(levelsRoot, directory);
+    if (relativeDirectory && !relativeDirectory.startsWith('..') && !path.isAbsolute(relativeDirectory)) {
+      directories.add(directory);
+    }
+  }
+  const warnings: string[] = [];
+  for (const filePath of files) {
+    try {
+      await rm(filePath, { force: true });
+    } catch (error) {
+      warnings.push(`Could not remove ${path.relative(uploadsRoot, filePath)}: ${error instanceof Error ? error.message : 'unknown error'}`);
+    }
+  }
+  for (const directory of directories) {
+    try {
+      await rmdir(directory);
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+      if (code !== 'ENOENT' && code !== 'ENOTEMPTY') {
+        warnings.push(`Could not remove ${path.relative(uploadsRoot, directory)}: ${error instanceof Error ? error.message : 'unknown error'}`);
+      }
+    }
+  }
+  return warnings;
+}
+function safeUploadPath(storedPath: string) {
+  const normalized = storedPath.replace(/\\/g, '/');
+  const uploadsMarker = normalized.lastIndexOf('/uploads/');
+  let candidate: string;
+  if (uploadsMarker >= 0) {
+    candidate = path.resolve(uploadsRoot, normalized.slice(uploadsMarker + '/uploads/'.length));
+  } else if (normalized.startsWith('uploads/')) {
+    candidate = path.resolve(uploadsRoot, normalized.slice('uploads/'.length));
+  } else if (path.isAbsolute(storedPath)) {
+    candidate = path.resolve(storedPath);
+  } else {
+    return null;
+  }
+  const relative = path.relative(uploadsRoot, candidate);
+  if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return null;
+  return candidate;
 }
