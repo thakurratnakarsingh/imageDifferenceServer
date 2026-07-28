@@ -8,6 +8,7 @@ import { api } from '../api/client';
 import { DifferenceCanvas } from '../components/DifferenceCanvas';
 import type { Difference, Level } from '../types';
 import { canApprove } from '../utils/validation';
+import { resolveMediaUrl } from '../utils/mediaUrl';
 
 export default function ReviewPage() {
   const {id}=useParams(); const client=useQueryClient(); const query=useQuery({queryKey:['level',id],queryFn:async()=> (await api.get(`/admin/levels/${id}`)).data.data as Level});
@@ -16,11 +17,13 @@ export default function ReviewPage() {
   async function regenerate(){await api.post(`/admin/puzzle-generator/levels/${id}/regenerate`);refresh();}
   if(query.isLoading||!level)return <div className="page centered"><CircularProgress/></div>;
   const valid=canApprove(level.validationStatus,level.differences.filter(x=>x.isActive).length,Boolean(level.modifiedImageUrl));
+  const originalImageUrl=resolveMediaUrl(level.originalImageUrl);
+  const modifiedImageUrl=resolveMediaUrl(level.modifiedImageUrl);
   return <div className="page"><div className="page-title review-title"><div><span className="eyebrow">Review studio · Level {level.levelNumber}</span><h1>Inspect every detail.</h1><p>Drag a marker to adjust its hit region. Publishing stays locked until all ten pass.</p></div><div className="review-actions"><Button variant="outlined" startIcon={<AutorenewRounded/>} onClick={regenerate}>Regenerate all</Button><Button variant="contained" startIcon={<CheckRounded/>} disabled={!valid} onClick={approve}>{level.reviewStatus==='approved'?'Approved & live':'Approve & publish'}</Button></div></div>
   {!valid&&<Alert severity="warning">This level cannot publish: it needs a passed pixel validation and exactly 10 active differences.</Alert>}
   <div className="review-status"><Chip label={`${level.differences.filter(x=>x.isActive).length}/10 differences`} color={valid?'success':'warning'}/><Chip label={`Validation: ${level.validationStatus}`}/><Chip label={`Review: ${level.reviewStatus}`}/></div>
-  <div className="compare-grid"><section className="panel image-panel"><div className="image-label"><span>01</span><b>Original</b><em>Locked reference</em></div><img src={level.originalImageUrl}/></section>
-  <section className="panel image-panel"><div className="image-label"><span>02</span><b>Modified + hit regions</b><em>Drag to reposition</em></div><div className="canvas-scroll"><DifferenceCanvas src={level.modifiedImageUrl} differences={level.differences} onChanged={refresh}/></div></section></div>
+  <div className="compare-grid"><section className="panel image-panel"><div className="image-label"><span>01</span><b>Original</b><em>Locked reference</em></div><img src={originalImageUrl} alt={`Original for level ${level.levelNumber}`}/></section>
+  <section className="panel image-panel"><div className="image-label"><span>02</span><b>Modified + hit regions</b><em>Drag to reposition</em></div><div className="canvas-scroll"><DifferenceCanvas src={modifiedImageUrl} differences={level.differences} onChanged={refresh}/></div></section></div>
   <section className="panel difference-list"><div className="list-heading"><div><span className="eyebrow">Generated changes</span><h2>The ten.</h2></div><p>Each edit is independently tappable and server-validated.</p></div>
   <div className="difference-rows">{level.differences.map(d=><DifferenceRow key={d.id} levelId={level.id} d={d} refresh={refresh}/>)}</div></section></div>;
 }
