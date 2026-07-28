@@ -4,14 +4,15 @@ import { Alert, Button, LinearProgress, MenuItem, TextField } from '@mui/materia
 import CloudUploadRounded from '@mui/icons-material/CloudUploadRounded';
 import AutoAwesomeRounded from '@mui/icons-material/AutoAwesomeRounded';
 import CheckCircleRounded from '@mui/icons-material/CheckCircleRounded';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '../api/client';
 import type { Job } from '../types';
 
 export default function CreateLevelPage() {
   const navigate = useNavigate(); const fileRef = useRef<HTMLInputElement>(null);
+  const [searchParams] = useSearchParams();
   const [file,setFile] = useState<File>(); const [preview,setPreview] = useState(''); const [job,setJob] = useState<Job>(); const [error,setError] = useState('');
-  const [form,setForm] = useState({levelNumber:'',actressId:'',difficulty:'easy',timeLimit:'180',maximumLives:'5',maximumHints:'3',generationProvider:'local'});
+  const [form,setForm] = useState({levelNumber:'',actressId:searchParams.get('categoryId') || '',difficulty:'easy',timeLimit:'180',maximumLives:'5',maximumHints:'3',generationProvider:'local'});
   const actresses = useQuery({queryKey:['actresses'],queryFn:async()=> (await api.get('/admin/actresses')).data.data});
   useEffect(()=>()=>{ if(preview) URL.revokeObjectURL(preview); },[preview]);
   useEffect(() => {

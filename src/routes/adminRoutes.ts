@@ -12,6 +12,7 @@ import { enqueueGeneration } from '../jobs/generationQueue';
 import { ImageModificationService } from '../services/image-generation/ImageModificationService';
 import { DifferenceValidationService } from '../services/image-generation/DifferenceValidationService';
 import { DifferenceRegion, ModificationType } from '../services/image-generation/types';
+import { Op } from 'sequelize';
 
 export const adminRoutes = Router();
 adminRoutes.use(requireAdmin);
@@ -35,11 +36,28 @@ adminRoutes.get('/dashboard', async (_req, res) => {
   res.json({ success: true, data: { actresses, levels, activeLevels, draftLevels, generationJobs: jobs, failedGenerationJobs: failedJobs, players, differences } });
 });
 
-adminRoutes.get('/actresses', async (_req, res) => res.json({ success: true, data: await Actress.findAll({ order: [['name','ASC']] }) }));
-adminRoutes.post('/actresses', async (req, res) => res.status(201).json({ success: true, data: await Actress.create(req.body) }));
+adminRoutes.get('/actresses', async (_req, res) => {
+  const categories = await Actress.findAll({ order: [['name','ASC']] });
+  const data = await Promise.all(categories.map(async category => ({
+    ...category.toJSON(),
+    levelCount: await Level.count({ where: { actressId: category.id } })
+  })));
+  res.json({ success: true, data });
+});
+adminRoutes.post('/actresses', async (req, res) => {
+  const payload = categoryPayload(req.body);
+  if (!payload.name || !payload.slug || !payload.country || !payload.industry) {
+    return res.status(400).json({ success: false, message: 'Name, slug, country, and industry are required' });
+  }
+  res.status(201).json({ success: true, data: await Actress.create(payload) });
+});
 adminRoutes.put('/actresses/:id', async (req, res) => {
   const item = await Actress.findByPk(req.params.id); if (!item) return res.status(404).json({ success: false, message: 'Not found' });
-  res.json({ success: true, data: await item.update(req.body) });
+  const payload = categoryPayload(req.body);
+  if (!payload.name || !payload.slug || !payload.country || !payload.industry) {
+    return res.status(400).json({ success: false, message: 'Name, slug, country, and industry are required' });
+  }
+  res.json({ success: true, data: await item.update(payload) });
 });
 adminRoutes.patch('/actresses/:id/status', async (req, res) => {
   const item = await Actress.findByPk(req.params.id); if (!item) return res.status(404).json({ success: false, message: 'Not found' });
@@ -53,8 +71,20 @@ adminRoutes.delete('/actresses/:id', async (req, res) => {
 
 adminRoutes.get('/levels', async (req, res) => {
   const page = Math.max(1, Number(req.query.page) || 1), limit = Math.min(100, Number(req.query.limit) || 20);
-  const where = req.query.status ? { reviewStatus: req.query.status } : {};
-  const result = await Level.findAndCountAll({ where, include: [Actress], limit, offset: (page-1)*limit, order: [['levelNumber','DESC']] });
+  const where: Record<string | symbol, unknown> = {};
+  if (req.query.status) where.reviewStatus = req.query.status;
+  if (req.query.actressId) where.actressId = Number(req.query.actressId);
+  if (req.query.search) {
+    const search = `%${String(req.query.search).trim()}%`;
+    where[Op.or] = [
+      { title: { [Op.like]: search } },
+      { '$Actress.name$': { [Op.like]: search } }
+    ];
+  }
+  const result = await Level.findAndCountAll({
+    where, include: [Actress], limit, offset: (page-1)*limit,
+    order: [['levelNumber','DESC']], distinct: true, subQuery: false
+  });
   res.json({ success: true, data: result.rows, meta: { page, limit, total: result.count } });
 });
 adminRoutes.get('/levels/:id', async (req, res) => {
@@ -64,8 +94,22 @@ adminRoutes.get('/levels/:id', async (req, res) => {
 });
 adminRoutes.put('/levels/:id', async (req, res) => {
   const level = await Level.findByPk(req.params.id); if (!level) return res.status(404).json({ success: false, message: 'Level not found' });
-  const allowed = ['title','timeLimit','maximumLives','maximumHints','completionBonus'];
+  const allowed = ['levelNumber','actressId','title','difficulty','timeLimit','maximumLives','maximumHints','completionBonus'];
   const changes = Object.fromEntries(Object.entries(req.body).filter(([key]) => allowed.includes(key)));
+  if (changes.levelNumber !== undefined) {
+    const levelNumber = Number(changes.levelNumber);
+    if (!Number.isInteger(levelNumber) || levelNumber < 1 || levelNumber > 1000) {
+      return res.status(400).json({ success: false, message: 'Level number must be between 1 and 1000' });
+    }
+    const duplicate = await Level.findOne({ where: { levelNumber, id: { [Op.ne]: level.id } } });
+    if (duplicate) return res.status(409).json({ success: false, message: 'Level number already exists' });
+    changes.levelNumber = levelNumber;
+  }
+  if (changes.actressId !== undefined) {
+    const category = await Actress.findByPk(Number(changes.actressId));
+    if (!category) return res.status(400).json({ success: false, message: 'Valid category is required' });
+    changes.actressId = category.id;
+  }
   res.json({ success: true, data: await level.update(changes) });
 });
 adminRoutes.patch('/levels/:id/status', async (req, res) => {
@@ -73,7 +117,16 @@ adminRoutes.patch('/levels/:id/status', async (req, res) => {
   if (req.body.isActive && level.reviewStatus !== 'approved') return res.status(409).json({ success: false, message: 'Only approved levels can be activated' });
   res.json({ success: true, data: await level.update({ isActive: Boolean(req.body.isActive) }) });
 });
-adminRoutes.delete('/levels/:id', async (req, res) => { await Level.destroy({ where: { id: req.params.id } }); res.status(204).end(); });
+adminRoutes.delete('/levels/:id', async (req, res) => {
+  const level = await Level.findByPk(req.params.id);
+  if (!level) return res.status(404).json({ success: false, message: 'Level not found' });
+  try {
+    await level.destroy();
+    res.status(204).end();
+  } catch {
+    res.status(409).json({ success: false, message: 'This level has player history and cannot be deleted. Deactivate it instead.' });
+  }
+});
 
 adminRoutes.post('/puzzle-generator/generate', upload.single('originalImage'), async (req, res) => {
   if (!req.file) return res.status(400).json({ success: false, message: 'originalImage is required' });
@@ -202,5 +255,17 @@ function toRegion(d: LevelDifference): DifferenceRegion {
     normalizedRadius: d.normalizedRadius == null ? undefined : Number(d.normalizedRadius),
     x: Number(d.get('sourceRegionX')), y: Number(d.get('sourceRegionY')), width: Number(d.get('sourceRegionWidth')), height: Number(d.get('sourceRegionHeight')),
     score: Number(d.confidenceScore), description: d.description, confidenceScore: Number(d.confidenceScore), difficultyScore: Number(d.difficultyScore)
+  };
+}
+function categoryPayload(body: Record<string, unknown>) {
+  const name = String(body.name ?? '').trim();
+  return {
+    name,
+    slug: String(body.slug ?? name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+    country: String(body.country ?? '').trim(),
+    industry: String(body.industry ?? '').trim(),
+    description: body.description == null ? null : String(body.description).trim() || null,
+    profileImage: body.profileImage == null ? null : String(body.profileImage).trim() || null,
+    isActive: body.isActive === undefined ? true : Boolean(body.isActive)
   };
 }

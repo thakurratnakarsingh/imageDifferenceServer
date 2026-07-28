@@ -6,6 +6,8 @@ const Dashboard = lazy(() => import('../pages/DashboardPage'));
 const Create = lazy(() => import('../pages/CreateLevelPage'));
 const Review = lazy(() => import('../pages/ReviewPage'));
 const Resources = lazy(() => import('../pages/ResourcePages'));
+const Categories = lazy(() => import('../pages/CategoryManagementPage'));
+const Levels = lazy(() => import('../pages/LevelManagementPage'));
 
 function Guard() { return localStorage.getItem('admin_token') ? <AdminLayout/> : <Navigate to="/admin/login" replace/>; }
 export function App() {
@@ -13,13 +15,13 @@ export function App() {
     <Route path="/admin/login" element={<Login/>}/>
     <Route element={<Guard/>}>
       <Route path="/admin/dashboard" element={<Dashboard/>}/>
+      <Route path="/admin/levels" element={<Levels/>}/>
       <Route path="/admin/levels/create" element={<Create/>}/>
       <Route path="/admin/levels/:id/review" element={<Review/>}/>
       <Route path="/admin/levels/:id/differences" element={<Review/>}/>
       <Route path="/admin/levels/edit/:id" element={<Review/>}/>
+      <Route path="/admin/actresses" element={<Categories/>}/>
       <Route path="/admin/:resource" element={<Resources/>}/>
-      <Route path="/admin/actresses/create" element={<Resources/>}/>
-      <Route path="/admin/actresses/edit/:id" element={<Resources/>}/>
     </Route>
     <Route path="*" element={<Navigate to="/admin/dashboard" replace/>}/>
   </Routes></Suspense>;
