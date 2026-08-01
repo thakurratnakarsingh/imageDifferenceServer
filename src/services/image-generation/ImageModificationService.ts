@@ -1,4 +1,5 @@
 import sharp from 'sharp';
+import { env } from '../../config/env';
 import { DifferenceRegion } from './types';
 
 function clampRegion(region: DifferenceRegion, imageWidth: number, imageHeight: number) {
@@ -34,7 +35,7 @@ async function duplicateLocalDetail(patch: Buffer, width: number, height: number
   const destinationTop = Math.min(height-stampHeight, Math.max(0, Math.floor(height * 0.56)));
   const stamp = await sharp(patch)
     .extract({ left: sourceLeft, top: sourceTop, width: stampWidth, height: stampHeight })
-    .flop().modulate({ brightness: 1.08, saturation: 1.2 })
+    .flop().modulate({ brightness: 1.03, saturation: 1.08 })
     .ensureAlpha().composite([{ input: roundedMask(stampWidth, stampHeight), blend: 'dest-in' }])
     .png().toBuffer();
   return sharp(patch).composite([{ input: stamp, left: destinationLeft, top: destinationTop }]).png().toBuffer();
@@ -44,33 +45,66 @@ async function changedPatch(patch: Buffer, region: DifferenceRegion, index: numb
   const width = Math.round(region.width); const height = Math.round(region.height);
   switch (region.modificationType) {
     case 'colour_change':
-      return sharp(patch).modulate({ hue: 75 + index * 19, saturation: 1.45, brightness: 1.03 }).png().toBuffer();
+      return sharp(patch).modulate({ hue: 28 + index * 11, saturation: 1.2, brightness: 1.02 }).png().toBuffer();
     case 'object_addition':
       return duplicateLocalDetail(patch, width, height);
     case 'object_removal':
-      return sharp(patch).blur(Math.max(2, Math.min(12, Math.min(width, height) / 9))).modulate({ saturation: 0.72, brightness: 1.02 }).png().toBuffer();
+      return sharp(patch).blur(Math.max(2, Math.min(8, Math.min(width, height) / 12))).modulate({ saturation: 0.86, brightness: 1.01 }).png().toBuffer();
     case 'pattern_change': {
-      const stroke = Math.max(2, Math.round(Math.min(width, height) * 0.045));
-      const overlay = Buffer.from(`<svg width="${width}" height="${height}"><g stroke="white" stroke-width="${stroke}" opacity=".58">
+      const stroke = Math.max(1, Math.round(Math.min(width, height) * 0.025));
+      const overlay = Buffer.from(`<svg width="${width}" height="${height}"><g stroke="white" stroke-width="${stroke}" opacity=".30">
         <path d="M${-width*.2} ${height*.35} L${width*.45} 0 M0 ${height*.8} L${width} ${height*.15} M${width*.55} ${height} L${width*1.2} ${height*.55}"/>
       </g></svg>`);
-      return sharp(patch).modulate({ saturation: 1.18 }).composite([{ input: overlay }]).png().toBuffer();
+      return sharp(patch).modulate({ saturation: 1.08 }).composite([{ input: overlay }]).png().toBuffer();
     }
     case 'shape_change':
-      return sharp(patch).flop().modulate({ brightness: 1.07, saturation: 1.16 }).png().toBuffer();
+      return sharp(patch).flop().modulate({ brightness: 1.025, saturation: 1.08 }).png().toBuffer();
     case 'rotation':
       return sharp(patch).rotate(180).png().toBuffer();
   }
 }
 
-async function ensureVisibleChange(input: Buffer, width: number, height: number, index: number) {
-  const tone = index % 2 === 0 ? '#f1b84b' : '#315f8f';
-  const wash = Buffer.from(`<svg width="${width}" height="${height}"><rect width="100%" height="100%" fill="${tone}" opacity=".42"/></svg>`);
-  return sharp(input).composite([{ input: wash }]).png().toBuffer();
+async function changedPixelCount(original: Buffer, changed: Buffer) {
+  const [before, after] = await Promise.all([
+    sharp(original).removeAlpha().raw().toBuffer(),
+    sharp(changed).removeAlpha().raw().toBuffer()
+  ]);
+  let count = 0;
+  for (let offset = 0; offset < Math.min(before.length, after.length); offset += 3) {
+    const delta = Math.max(
+      Math.abs((before[offset] ?? 0) - (after[offset] ?? 0)),
+      Math.abs((before[offset + 1] ?? 0) - (after[offset + 1] ?? 0)),
+      Math.abs((before[offset + 2] ?? 0) - (after[offset + 2] ?? 0))
+    );
+    if (delta >= env.PIXEL_DIFF_THRESHOLD) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Flat image areas do not react to flips, rotations, or blur. In that case use a
+ * small adaptive channel shift so every selected region remains detectable
+ * without painting the conspicuous coloured wash used by the old generator.
+ */
+async function ensureDetectableChange(original: Buffer, changed: Buffer, index: number) {
+  if (await changedPixelCount(original, changed) >= env.MIN_CHANGED_AREA_PIXELS * 1.5) return changed;
+
+  const stats = await sharp(original).stats();
+  const channel = index % 3;
+  const offsets = [0, 0, 0];
+  const mean = stats.channels[channel]?.mean ?? 128;
+  offsets[channel] = mean > 127 ? -28 : 28;
+  offsets[(channel + 1) % 3] = mean > 127 ? -8 : 8;
+  return sharp(original).removeAlpha().linear([1, 1, 1], offsets).png().toBuffer();
 }
 
 export class ImageModificationService {
   async apply(originalPath: string, outputPath: string, regions: DifferenceRegion[]) {
+    const differenceNumbers = new Set(regions.map(region => region.differenceNumber));
+    if (regions.length !== 10 || differenceNumbers.size !== 10 ||
+        [...differenceNumbers].some(number => number < 1 || number > 10)) {
+      throw new Error('Modified image requires exactly 10 uniquely numbered difference regions');
+    }
     const metadata = await sharp(originalPath).metadata();
     const imageWidth = metadata.width ?? 0; const imageHeight = metadata.height ?? 0;
     if (!imageWidth || !imageHeight) throw new Error('Original image dimensions could not be read');
@@ -78,8 +112,8 @@ export class ImageModificationService {
       const area = clampRegion(region, imageWidth, imageHeight);
       const patch = await sharp(originalPath).extract(area).png().toBuffer();
       const changed = await changedPatch(patch, { ...region, width: area.width, height: area.height }, index);
-      const visible = await ensureVisibleChange(changed, area.width, area.height, index);
-      return { input: await masked(visible, area.width, area.height), left: area.left, top: area.top };
+      const detectable = await ensureDetectableChange(patch, changed, index);
+      return { input: await masked(detectable, area.width, area.height), left: area.left, top: area.top };
     }));
     await sharp(originalPath).composite(overlays).png({ compressionLevel: 8 }).toFile(outputPath);
   }

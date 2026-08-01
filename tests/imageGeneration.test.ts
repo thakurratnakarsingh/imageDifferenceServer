@@ -3,6 +3,7 @@ import path from 'path';
 import { mkdtemp, rm } from 'fs/promises';
 import sharp from 'sharp';
 import { LocalImageDifferenceGenerator } from '../src/services/image-generation/LocalImageDifferenceGenerator';
+import { ImageModificationService } from '../src/services/image-generation/ImageModificationService';
 import { CoordinateService } from '../src/services/image-generation/CoordinateService';
 import { regionsOverlap } from '../src/services/image-generation/RegionSelectionService';
 
@@ -22,6 +23,8 @@ describe('local puzzle generator', () => {
       originalPath: original, outputDirectory: directory, difficulty: 'easy', seed: 'unit-test'
     });
     expect(result.differences).toHaveLength(10);
+    expect(result.differences.map(difference => difference.differenceNumber).sort((a, b) => a - b))
+      .toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
     expect(result.validation.valid).toBe(true);
     expect(result.validation.coveredDifferenceCount).toBe(10);
     expect(result.validation.dimensionsMatch).toBe(true);
@@ -38,6 +41,33 @@ describe('local puzzle generator', () => {
     }
     const [originalMeta, modifiedMeta] = await Promise.all([sharp(original).metadata(), sharp(result.modifiedPath).metadata()]);
     expect([modifiedMeta.width, modifiedMeta.height]).toEqual([originalMeta.width, originalMeta.height]);
+
+    const [originalPixels, modifiedPixels] = await Promise.all([
+      sharp(original).removeAlpha().raw().toBuffer({ resolveWithObject: true }),
+      sharp(result.modifiedPath).removeAlpha().raw().toBuffer({ resolveWithObject: true })
+    ]);
+    let outsideChangedPixels = 0;
+    for (let pixel = 0; pixel < originalPixels.info.width * originalPixels.info.height; pixel += 1) {
+      const x = pixel % originalPixels.info.width;
+      const y = Math.floor(pixel / originalPixels.info.width);
+      const insideDifference = result.differences.some(region =>
+        x >= region.x && x < region.x + region.width && y >= region.y && y < region.y + region.height
+      );
+      if (insideDifference) continue;
+      const offset = pixel * 3;
+      if (!modifiedPixels.data.subarray(offset, offset + 3).equals(originalPixels.data.subarray(offset, offset + 3))) {
+        outsideChangedPixels += 1;
+      }
+    }
+    expect(outsideChangedPixels).toBe(0);
+  });
+
+  it('rejects output unless all ten uniquely numbered changes are present', async () => {
+    const original = path.join(directory, 'original.png');
+    const modified = path.join(directory, 'modified.png');
+    await sharp({ create: { width: 800, height: 800, channels: 3, background: '#789abc' } }).png().toFile(original);
+    await expect(new ImageModificationService().apply(original, modified, []))
+      .rejects.toThrow('exactly 10 uniquely numbered difference regions');
   });
 });
 

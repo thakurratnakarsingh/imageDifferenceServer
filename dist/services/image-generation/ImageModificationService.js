@@ -5,30 +5,112 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ImageModificationService = void 0;
 const sharp_1 = __importDefault(require("sharp"));
-function svgFor(region, index) {
-    const w = region.width;
-    const h = region.height;
-    const hue = (index * 43 + 18) % 360;
-    const common = `width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"`;
-    switch (region.modificationType) {
-        case 'object_addition':
-            return `<svg ${common}><polygon points="${w * .5},${h * .08} ${w * .62},${h * .38} ${w * .94},${h * .4} ${w * .69},${h * .59} ${w * .78},${h * .9} ${w * .5},${h * .72} ${w * .22},${h * .9} ${w * .31},${h * .59} ${w * .06},${h * .4} ${w * .38},${h * .38}" fill="hsl(${hue} 82% 54%)" stroke="white" stroke-width="3"/></svg>`;
-        case 'pattern_change':
-            return `<svg ${common}><rect width="${w}" height="${h}" rx="${Math.min(w, h) * .28}" fill="hsla(${hue},80%,48%,.62)"/><path d="M0 ${h * .2} L${w} 0 M0 ${h * .55} L${w} ${h * .25} M0 ${h * .9} L${w} ${h * .6}" stroke="white" stroke-width="${Math.max(3, w * .06)}" opacity=".82"/></svg>`;
-        case 'shape_change':
-            return `<svg ${common}><rect x="${w * .1}" y="${h * .18}" width="${w * .8}" height="${h * .64}" rx="${Math.min(w, h) * .12}" fill="hsl(${hue} 72% 50%)" stroke="white" stroke-width="3"/></svg>`;
-        case 'rotation':
-            return `<svg ${common}><g transform="translate(${w / 2} ${h / 2}) rotate(35)"><rect x="${-w * .32}" y="${-h * .2}" width="${w * .64}" height="${h * .4}" rx="8" fill="hsl(${hue} 76% 48%)" stroke="white" stroke-width="3"/></g></svg>`;
-        case 'object_removal':
-            return `<svg ${common}><ellipse cx="${w / 2}" cy="${h / 2}" rx="${w * .43}" ry="${h * .38}" fill="hsla(${hue},10%,76%,.88)" stroke="white" stroke-width="5"/></svg>`;
-        default:
-            return `<svg ${common}><ellipse cx="${w / 2}" cy="${h / 2}" rx="${w * .43}" ry="${h * .38}" fill="hsla(${hue},86%,48%,.66)"/></svg>`;
+const env_1 = require("../../config/env");
+function clampRegion(region, imageWidth, imageHeight) {
+    const left = Math.max(0, Math.min(imageWidth - 1, Math.round(region.x)));
+    const top = Math.max(0, Math.min(imageHeight - 1, Math.round(region.y)));
+    const width = Math.max(1, Math.min(imageWidth - left, Math.round(region.width)));
+    const height = Math.max(1, Math.min(imageHeight - top, Math.round(region.height)));
+    return { left, top, width, height };
+}
+function roundedMask(width, height, feathered = false) {
+    const radius = Math.max(3, Math.round(Math.min(width, height) * 0.22));
+    if (!feathered) {
+        return Buffer.from(`<svg width="${width}" height="${height}"><rect width="${width}" height="${height}" rx="${radius}" fill="white"/></svg>`);
     }
+    const feather = Math.max(2, Math.round(Math.min(width, height) * 0.06));
+    return Buffer.from(`<svg width="${width}" height="${height}">
+    <defs><filter id="soft" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="${feather}"/></filter></defs>
+    <rect x="${feather}" y="${feather}" width="${Math.max(1, width - feather * 2)}" height="${Math.max(1, height - feather * 2)}" rx="${radius}" fill="white" filter="url(#soft)"/>
+  </svg>`);
+}
+async function masked(input, width, height) {
+    return (0, sharp_1.default)(input).ensureAlpha().composite([{ input: roundedMask(width, height, true), blend: 'dest-in' }]).png().toBuffer();
+}
+async function duplicateLocalDetail(patch, width, height) {
+    const stampWidth = Math.max(8, Math.floor(width * 0.34));
+    const stampHeight = Math.max(8, Math.floor(height * 0.34));
+    const sourceLeft = Math.min(width - stampWidth, Math.max(0, Math.floor(width * 0.08)));
+    const sourceTop = Math.min(height - stampHeight, Math.max(0, Math.floor(height * 0.1)));
+    const destinationLeft = Math.min(width - stampWidth, Math.max(0, Math.floor(width * 0.58)));
+    const destinationTop = Math.min(height - stampHeight, Math.max(0, Math.floor(height * 0.56)));
+    const stamp = await (0, sharp_1.default)(patch)
+        .extract({ left: sourceLeft, top: sourceTop, width: stampWidth, height: stampHeight })
+        .flop().modulate({ brightness: 1.03, saturation: 1.08 })
+        .ensureAlpha().composite([{ input: roundedMask(stampWidth, stampHeight), blend: 'dest-in' }])
+        .png().toBuffer();
+    return (0, sharp_1.default)(patch).composite([{ input: stamp, left: destinationLeft, top: destinationTop }]).png().toBuffer();
+}
+async function changedPatch(patch, region, index) {
+    const width = Math.round(region.width);
+    const height = Math.round(region.height);
+    switch (region.modificationType) {
+        case 'colour_change':
+            return (0, sharp_1.default)(patch).modulate({ hue: 28 + index * 11, saturation: 1.2, brightness: 1.02 }).png().toBuffer();
+        case 'object_addition':
+            return duplicateLocalDetail(patch, width, height);
+        case 'object_removal':
+            return (0, sharp_1.default)(patch).blur(Math.max(2, Math.min(8, Math.min(width, height) / 12))).modulate({ saturation: 0.86, brightness: 1.01 }).png().toBuffer();
+        case 'pattern_change': {
+            const stroke = Math.max(1, Math.round(Math.min(width, height) * 0.025));
+            const overlay = Buffer.from(`<svg width="${width}" height="${height}"><g stroke="white" stroke-width="${stroke}" opacity=".30">
+        <path d="M${-width * .2} ${height * .35} L${width * .45} 0 M0 ${height * .8} L${width} ${height * .15} M${width * .55} ${height} L${width * 1.2} ${height * .55}"/>
+      </g></svg>`);
+            return (0, sharp_1.default)(patch).modulate({ saturation: 1.08 }).composite([{ input: overlay }]).png().toBuffer();
+        }
+        case 'shape_change':
+            return (0, sharp_1.default)(patch).flop().modulate({ brightness: 1.025, saturation: 1.08 }).png().toBuffer();
+        case 'rotation':
+            return (0, sharp_1.default)(patch).rotate(180).png().toBuffer();
+    }
+}
+async function changedPixelCount(original, changed) {
+    const [before, after] = await Promise.all([
+        (0, sharp_1.default)(original).removeAlpha().raw().toBuffer(),
+        (0, sharp_1.default)(changed).removeAlpha().raw().toBuffer()
+    ]);
+    let count = 0;
+    for (let offset = 0; offset < Math.min(before.length, after.length); offset += 3) {
+        const delta = Math.max(Math.abs((before[offset] ?? 0) - (after[offset] ?? 0)), Math.abs((before[offset + 1] ?? 0) - (after[offset + 1] ?? 0)), Math.abs((before[offset + 2] ?? 0) - (after[offset + 2] ?? 0)));
+        if (delta >= env_1.env.PIXEL_DIFF_THRESHOLD)
+            count += 1;
+    }
+    return count;
+}
+/**
+ * Flat image areas do not react to flips, rotations, or blur. In that case use a
+ * small adaptive channel shift so every selected region remains detectable
+ * without painting the conspicuous coloured wash used by the old generator.
+ */
+async function ensureDetectableChange(original, changed, index) {
+    if (await changedPixelCount(original, changed) >= env_1.env.MIN_CHANGED_AREA_PIXELS * 1.5)
+        return changed;
+    const stats = await (0, sharp_1.default)(original).stats();
+    const channel = index % 3;
+    const offsets = [0, 0, 0];
+    const mean = stats.channels[channel]?.mean ?? 128;
+    offsets[channel] = mean > 127 ? -28 : 28;
+    offsets[(channel + 1) % 3] = mean > 127 ? -8 : 8;
+    return (0, sharp_1.default)(original).removeAlpha().linear([1, 1, 1], offsets).png().toBuffer();
 }
 class ImageModificationService {
     async apply(originalPath, outputPath, regions) {
-        const overlays = regions.map((region, index) => ({
-            input: Buffer.from(svgFor(region, index)), left: region.x, top: region.y
+        const differenceNumbers = new Set(regions.map(region => region.differenceNumber));
+        if (regions.length !== 10 || differenceNumbers.size !== 10 ||
+            [...differenceNumbers].some(number => number < 1 || number > 10)) {
+            throw new Error('Modified image requires exactly 10 uniquely numbered difference regions');
+        }
+        const metadata = await (0, sharp_1.default)(originalPath).metadata();
+        const imageWidth = metadata.width ?? 0;
+        const imageHeight = metadata.height ?? 0;
+        if (!imageWidth || !imageHeight)
+            throw new Error('Original image dimensions could not be read');
+        const overlays = await Promise.all(regions.map(async (region, index) => {
+            const area = clampRegion(region, imageWidth, imageHeight);
+            const patch = await (0, sharp_1.default)(originalPath).extract(area).png().toBuffer();
+            const changed = await changedPatch(patch, { ...region, width: area.width, height: area.height }, index);
+            const detectable = await ensureDetectableChange(patch, changed, index);
+            return { input: await masked(detectable, area.width, area.height), left: area.left, top: area.top };
         }));
         await (0, sharp_1.default)(originalPath).composite(overlays).png({ compressionLevel: 8 }).toFile(outputPath);
     }
