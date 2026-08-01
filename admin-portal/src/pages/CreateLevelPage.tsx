@@ -29,6 +29,7 @@ export default function CreateLevelPage() {
   const navigate = useNavigate(); const fileRef = useRef<HTMLInputElement>(null);
   const [searchParams] = useSearchParams();
   const [file,setFile] = useState<File>(); const [preview,setPreview] = useState(''); const [job,setJob] = useState<Job>(); const [error,setError] = useState('');
+  const [isSubmitting,setIsSubmitting] = useState(false);
   const [imageInfo,setImageInfo] = useState<ImageInfo>(); const [cropOpen,setCropOpen] = useState(false);
   const [form,setForm] = useState({levelNumber:'',actressId:searchParams.get('categoryId') || '',difficulty:'easy',timeLimit:'180',maximumLives:'5',maximumHints:'3',generationProvider:'local'});
   const actresses = useQuery({queryKey:['actresses'],queryFn:async()=> (await api.get('/admin/actresses')).data.data});
@@ -36,7 +37,12 @@ export default function CreateLevelPage() {
   useEffect(() => {
     if (!job || ['completed','failed','cancelled'].includes(job.status)) return;
     const timer = window.setInterval(async()=> {
-      const next = (await api.get(`/admin/puzzle-generator/jobs/${job.jobUuid}`)).data.data; setJob(next);
+      try {
+        const next = (await api.get(`/admin/puzzle-generator/jobs/${job.jobUuid}`)).data.data;
+        setJob(next);
+      } catch (requestError: any) {
+        setError(requestError.response?.data?.message || 'Could not check generation progress. The server job may still be running.');
+      }
     }, 1200); return ()=>clearInterval(timer);
   },[job?.jobUuid,job?.status]);
   async function select(next?: File) {
@@ -74,16 +80,43 @@ export default function CreateLevelPage() {
     setError('');
   }
   async function generate(e:React.FormEvent) {
-    e.preventDefault(); if(!file) return setError('Choose one original image first.');
+    e.preventDefault();
+    setError('');
+    const levelNumber = Number(form.levelNumber);
+    if (!Number.isInteger(levelNumber) || levelNumber < 1 || levelNumber > 1000) return setError('Enter a level number between 1 and 1000.');
+    if (!form.actressId) return setError('Choose a category before generating the level.');
+    if(!file) return setError('Choose one original image first.');
     if (!imageInfo?.isValid) return setError('Edit and crop the image before generating the level.');
     const data = new FormData(); data.append('originalImage',file); Object.entries(form).forEach(([k,v])=>data.append(k,v));
-    try { const response=(await api.post('/admin/puzzle-generator/generate',data)).data.data; setJob({jobUuid:response.jobId,levelId:response.levelId,status:response.status,progress:0,currentStep:'Queued'}); }
-    catch(e:any){setError(e.response?.data?.message||'Generation could not start');}
+    setIsSubmitting(true);
+    try {
+      const response=(await api.post('/admin/puzzle-generator/generate',data)).data.data;
+      setJob({jobUuid:response.jobId,levelId:response.levelId,status:response.status,progress:0,currentStep:'Queued'});
+    } catch(e:any) {
+      setError(e.response?.data?.message || (e.request ? 'The server did not respond. Check that the API is running and try again.' : 'Generation could not start'));
+    } finally {
+      setIsSubmitting(false);
+    }
   }
-  const complete=job?.status==='completed', failed=job?.status==='failed';
+  async function retryGeneration() {
+    if (!job) return;
+    setError('');
+    setIsSubmitting(true);
+    try {
+      const response=(await api.post(`/admin/puzzle-generator/jobs/${job.jobUuid}/retry`)).data.data;
+      setJob(current => current && { ...current, ...response, status:'pending', progress:0, currentStep:'Queued' });
+    } catch(e:any) {
+      setError(e.response?.data?.message || 'Generation retry could not start.');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+  const complete=job?.status==='completed';
+  const failed=job?.status==='failed'||job?.status==='cancelled';
+  const running=Boolean(job&&!complete&&!failed);
   return <div className="page create-page"><div className="page-title"><div><span className="eyebrow">New level</span><h1>Make ten differences.</h1><p>All we need is one great original.</p></div><div className="step-pill">01 <span>Upload</span> · 02 <span>Generate</span> · 03 <span>Review</span></div></div>
   {error&&<Alert severity="error">{error}</Alert>} {failed&&<Alert severity="error">{job.errorMessage || 'Generation failed after all retries.'}</Alert>}
-  <form className="create-grid" onSubmit={generate}><section className="panel upload-panel">
+  <form className="create-grid" onSubmit={generate} noValidate><section className="panel upload-panel">
     <div className={`dropzone ${preview?'has-image':''}`} onClick={()=>fileRef.current?.click()} onDragOver={e=>e.preventDefault()} onDrop={e=>{e.preventDefault();select(e.dataTransfer.files[0]);}}>
       {preview?<><img src={preview}/><div className="image-preview-actions" onClick={e=>e.stopPropagation()}>
         <Button variant="contained" startIcon={<CropRounded/>} onClick={()=>setCropOpen(true)}>Edit & crop</Button>
@@ -106,8 +139,13 @@ export default function CreateLevelPage() {
     <TextField label="Timer (seconds)" type="number" value={form.timeLimit} onChange={e=>setForm({...form,timeLimit:e.target.value})}/>
     <TextField label="Lives" type="number" value={form.maximumLives} onChange={e=>setForm({...form,maximumLives:e.target.value})}/>
   </div>
-  {job&&<div className={`job-progress ${complete?'done':''}`}><div><b>{complete?'Ten differences ready':job.currentStep}</b><span>{job.progress}%</span></div><LinearProgress variant="determinate" value={job.progress}/><small>{complete?'Dimensions, changed pixels, separation, and coordinates passed.':'You can leave this screen; the server job keeps running.'}</small></div>}
-  {complete?<Button variant="contained" size="large" onClick={()=>navigate(`/admin/levels/${job.levelId}/review`)}>Open review studio</Button>:<Button variant="contained" size="large" type="submit" disabled={!file||!imageInfo?.isValid||Boolean(job&&!failed)} startIcon={<AutoAwesomeRounded/>}>{job&&!failed?'Generating…':'Generate modified image'}</Button>}
+  {isSubmitting&&!job&&<div className="job-progress"><div><b>Uploading original image</b><span>Starting…</span></div><LinearProgress/><small>The generation job will start as soon as the upload completes.</small></div>}
+  {job&&<div className={`job-progress ${complete?'done':''}`}><div><b>{complete?'Ten differences ready':failed?'Generation stopped':job.currentStep}</b><span>{job.progress}%</span></div><LinearProgress variant="determinate" value={job.progress}/><small>{complete?'Dimensions, changed pixels, separation, and coordinates passed.':failed?'Retry this same job; the level and uploaded original are already saved.':'You can leave this screen; the server job keeps running.'}</small></div>}
+  {complete
+    ? <Button variant="contained" size="large" type="button" onClick={()=>navigate(`/admin/levels/${job.levelId}/review`)}>Open review studio</Button>
+    : failed
+      ? <Button variant="contained" size="large" type="button" disabled={isSubmitting} onClick={retryGeneration} startIcon={<ReplayRounded/>}>{isSubmitting?'Restarting…':'Retry generation'}</Button>
+      : <Button variant="contained" size="large" type="submit" disabled={isSubmitting||running} startIcon={<AutoAwesomeRounded/>}>{isSubmitting?'Uploading…':running?'Generating…':'Generate modified image'}</Button>}
   </section></form>
   <ImageCropDialog file={file} open={cropOpen} onClose={()=>setCropOpen(false)} onApply={applyCrop}/>
   </div>;
